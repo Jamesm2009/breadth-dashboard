@@ -327,6 +327,7 @@ footer {
         <div class="zl-item"><div class="zl-swatch zl-bull-s"></div><span>Bullish ≥70%</span></div>
         <div class="zl-item"><div class="zl-swatch zl-neut-s"></div><span>Neutral 50–70%</span></div>
         <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;50%</span></div>
+        <div class="zl-item"><div class="zl-swatch" style="background:#f59e0b;opacity:.7;border: 1px dashed #f59e0b;"></div><span>SPY price (right axis)</span></div>
       </div>
     </div>
 
@@ -583,6 +584,12 @@ const xAxis = {
   grid: { color: '#e5e7eb' }
 };
 
+// ── SPY prices from history ───────────────────────────────────────────────────
+const spyValues = historyData.map(d => d.spy_close ?? null);
+const spyValid  = spyValues.filter(v => v !== null);
+const spyMin    = spyValid.length ? Math.floor(Math.min(...spyValid) * 0.98) : 0;
+const spyMax    = spyValid.length ? Math.ceil(Math.max(...spyValid)  * 1.02) : 600;
+
 // ── Line chart ────────────────────────────────────────────────────────────────
 const lineCtx = document.getElementById('breadth-chart').getContext('2d');
 new Chart(lineCtx, {
@@ -590,34 +597,73 @@ new Chart(lineCtx, {
   plugins: [makeZonePlugin('line')],
   data: {
     labels,
-    datasets: [{
-      data: values,
-      borderWidth: 2,
-      pointRadius: N > 80 ? 2 : 4,
-      pointBackgroundColor: pointColors,
-      pointBorderColor: pointColors,
-      fill: false,
-      tension: 0.3,
-      segment: { borderColor: ctx => ctx.p1.parsed.y >= 70 ? '#15803d' : ctx.p1.parsed.y < 50 ? '#dc2626' : '#6b7280' }
-    }]
+    datasets: [
+      // Breadth % (left axis)
+      {
+        label: '% Bullish',
+        data: values,
+        yAxisID: 'y',
+        borderWidth: 2,
+        pointRadius: N > 80 ? 2 : 4,
+        pointBackgroundColor: pointColors,
+        pointBorderColor: pointColors,
+        fill: false,
+        tension: 0.3,
+        segment: { borderColor: ctx => ctx.p1.parsed.y >= 70 ? '#15803d' : ctx.p1.parsed.y < 50 ? '#dc2626' : '#6b7280' },
+        order: 1,
+      },
+      // SPY close price (right axis)
+      {
+        label: 'SPY',
+        data: spyValues,
+        yAxisID: 'ySpy',
+        borderColor: '#f59e0b',
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        fill: false,
+        tension: 0.2,
+        order: 2,
+      }
+    ]
   },
   options: {
     responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: 'index', intersect: false },
     plugins: {
-      legend: { display: false },
+      legend: {
+        display: true,
+        position: 'top',
+        align: 'end',
+        labels: {
+          boxWidth: 16, font: { size: 11 }, color: '#6b7280',
+          generateLabels: chart => [
+            { text: '% Bullish breadth', strokeStyle: '#2563eb', fillStyle: '#2563eb', lineWidth: 2 },
+            { text: 'SPY close price', strokeStyle: '#f59e0b', fillStyle: '#f59e0b', lineWidth: 1.5, lineDash: [4,3] },
+          ]
+        }
+      },
       tooltip: {
         callbacks: {
-          label: c => `${c.parsed.y}% bullish`,
-          afterLabel: c => c.parsed.y >= 70 ? '▲ Bullish regime' : c.parsed.y < 50 ? '▼ Bearish regime' : '◆ Neutral'
+          label: c => c.dataset.label === 'SPY'
+            ? `SPY $${c.parsed.y}`
+            : `${c.parsed.y}% bullish`,
+          afterLabel: c => c.dataset.label === 'SPY' ? '' :
+            c.parsed.y >= 70 ? '▲ Bullish regime' : c.parsed.y < 50 ? '▼ Bearish regime' : '◆ Neutral'
         }
       }
     },
     scales: {
       x: xAxis,
       y: {
-        min: 0, max: 100,
+        min: 0, max: 100, position: 'left',
         ticks: { stepSize: 10, font: { size: 10 }, color: '#6b7280', callback: v => v + '%' },
         grid: { color: '#e5e7eb' }
+      },
+      ySpy: {
+        min: spyMin, max: spyMax, position: 'right',
+        ticks: { font: { size: 10 }, color: '#f59e0b', callback: v => '$' + v },
+        grid: { drawOnChartArea: false }
       }
     }
   }
