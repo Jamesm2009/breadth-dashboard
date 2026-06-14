@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KCM Market Breadth Dashboard</title>
+<style>
+:root {
+  --bg:       #eef1f6;
+  --surface:  #ffffff;
+  --header:   #0f2240;
+  --border:   #d0d7e3;
+  --text:     #1a2035;
+  --muted:    #6b7280;
+  --accent:   #2563eb;
+
+  --bull:     #15803d;
+  --bull-lt:  #dcfce7;
+  --bear:     #991b1b;
+  --bear-lt:  #fee2e2;
+  --neut:     #374151;
+  --neut-lt:  #f3f4f6;
+
+  --zone-bull: rgba(21,128,61,.10);
+  --zone-bear: rgba(153,27,27,.10);
+  --zone-neut: rgba(55,65,81,.04);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13.5px; }
+
+/* ── Header ── */
+header {
+  background: var(--header); color: #fff;
+  padding: 10px 18px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  position: sticky; top: 0; z-index: 30;
+  box-shadow: 0 2px 10px rgba(0,0,0,.3);
+}
+.h-title { font-size: 16px; font-weight: 700; }
+.h-sub   { font-size: 10.5px; color: #93c5fd; margin-top: 2px; }
+.h-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.badge   { background: rgba(255,255,255,.12); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: #cbd5e1; }
+.badge b { color: #fff; }
+
+/* ── Score pill ── */
+.score-pill {
+  border-radius: 8px; padding: 6px 14px;
+  font-size: 13px; font-weight: 800; letter-spacing: .3px;
+  display: flex; align-items: center; gap: 8px;
+}
+.pill-bull { background: #166534; color: #bbf7d0; }
+.pill-bear { background: #991b1b; color: #fecaca; }
+.pill-neut { background: #374151; color: #d1d5db; }
+.pill-dot  { width: 9px; height: 9px; border-radius: 50%; }
+.dot-bull  { background: #4ade80; }
+.dot-bear  { background: #f87171; }
+.dot-neut  { background: #9ca3af; }
+
+/* ── Loading banner ── */
+#loading-banner {
+  background: #1e40af; color: #fff;
+  padding: 10px 16px; font-size: 12.5px;
+  display: flex; align-items: center; gap: 12px; justify-content: center;
+}
+
+/* ── Layout ── */
+.main { padding: 14px 14px 30px; display: flex; flex-direction: column; gap: 16px; }
+
+/* ── Chart card ── */
+.card {
+  background: var(--surface); border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden;
+}
+.card-header {
+  background: #1e2d45; color: #93c5fd;
+  padding: 8px 14px; font-size: 11px; font-weight: 700;
+  letter-spacing: .4px; text-transform: uppercase;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.card-body { padding: 14px; }
+
+/* ── Chart container ── */
+#chart-wrap { position: relative; height: 280px; }
+canvas#breadth-chart { width: 100% !important; height: 100% !important; }
+
+/* ── Zone legend ── */
+.zone-legend {
+  display: flex; gap: 16px; padding: 8px 14px 10px;
+  font-size: 11px; color: var(--muted); border-top: 1px solid var(--border);
+}
+.zl-item { display: flex; align-items: center; gap: 5px; }
+.zl-swatch { width: 14px; height: 10px; border-radius: 2px; }
+.zl-bull-s { background: rgba(21,128,61,.35); }
+.zl-neut-s { background: rgba(100,116,139,.18); }
+.zl-bear-s { background: rgba(153,27,27,.30); }
+
+/* ── Summary stats row ── */
+.stats-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;
+}
+.stat-box {
+  background: var(--surface); border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,.07);
+  text-align: center;
+}
+.stat-val  { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.stat-lbl  { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.c-bull { color: var(--bull); }
+.c-bear { color: var(--bear); }
+.c-neut { color: var(--neut); }
+
+/* ── Heatmap grid ── */
+.heatmap-section { display: flex; flex-direction: column; gap: 12px; }
+
+.hm-group-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; color: var(--muted);
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.hm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 5px;
+}
+
+.hm-cell {
+  border-radius: 6px; padding: 7px 8px;
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid transparent;
+  transition: transform .1s;
+}
+.hm-cell:hover { transform: scale(1.03); }
+
+.hm-bull { background: #dcfce7; border-color: #86efac; }
+.hm-bear { background: #fee2e2; border-color: #fca5a5; }
+.hm-na   { background: #f3f4f6; border-color: #e5e7eb; }
+
+.hm-ticker { font-size: 11.5px; font-weight: 800; font-family: 'Courier New', monospace; }
+.hm-name   { font-size: 9px; color: var(--muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-sig    { font-size: 10px; font-weight: 700; margin-top: 2px; }
+
+.hm-bull .hm-ticker { color: #15803d; }
+.hm-bull .hm-sig    { color: #15803d; }
+.hm-bear .hm-ticker { color: #991b1b; }
+.hm-bear .hm-sig    { color: #991b1b; }
+.hm-na   .hm-ticker { color: var(--muted); }
+.hm-na   .hm-sig    { color: var(--muted); }
+
+/* ── History heatmap (mini date strip) ── */
+.history-strip {
+  display: flex; gap: 3px; align-items: flex-end;
+  overflow-x: auto; padding: 4px 2px 8px;
+  scrollbar-width: thin;
+}
+.hs-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
+.hs-bar {
+  width: 28px; border-radius: 3px 3px 0 0;
+  cursor: pointer; transition: opacity .1s;
+  position: relative;
+}
+.hs-bar:hover { opacity: .8; }
+.hs-pct { font-size: 8px; color: var(--muted); text-align: center; line-height: 1; }
+.hs-date { font-size: 8px; color: var(--muted); text-align: center; writing-mode: vertical-rl; transform: rotate(180deg); max-height: 38px; overflow: hidden; }
+
+/* ── Tooltip ── */
+#tooltip {
+  position: fixed; z-index: 100;
+  background: #1e2d45; color: #e2e8f0;
+  border-radius: 8px; padding: 8px 12px;
+  font-size: 11.5px; pointer-events: none;
+  display: none; max-width: 200px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.3);
+}
+
+footer {
+  text-align: center; padding: 14px; color: var(--muted);
+  font-size: 11px; border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+</style>
+</head>
+<body>
+
+{% if error %}
+<div style="background:#991b1b;color:#fecaca;text-align:center;padding:10px;font-size:13px;font-weight:600;">
+  ⚠ Error: {{ error }}
+</div>
+{% endif %}
+
+{% if is_loading %}
+<div id="loading-banner">
+  <span>⏳</span>
+  <span>Building breadth history (60 days)... this takes ~3 minutes on first load.</span>
+  <span id="prog" style="opacity:.8">{{ progress }}</span>
+</div>
+<script>
+(function poll(){
+  setTimeout(function(){
+    fetch('/status').then(r=>r.json()).then(d=>{
+      var p = document.getElementById('prog');
+      if(p) p.textContent = d.progress || '';
+      if(d.phase >= 4 && d.days > 0){ location.reload(); }
+      else { poll(); }
+    }).catch(()=>poll());
+  }, 4000);
+})();
+</script>
+{% endif %}
+
+<!-- ── Header ── -->
+<header>
+  <div>
+    <div class="h-title">📊 KCM Market Breadth — Matrix Series</div>
+    <div class="h-sub">Bull/Bear signal per ETF via Matrix Series (Pine Script port) &nbsp;|&nbsp; 42 tickers · 21 bull + 21 bear inverse pairs</div>
+  </div>
+  <div class="h-right">
+
+    {% if history %}
+      {% set latest = history[-1] %}
+      {% set pct = latest.pct_bullish %}
+      {% if pct >= 70 %}
+        <div class="score-pill pill-bull">
+          <span class="pill-dot dot-bull"></span>
+          BULLISH &nbsp;|&nbsp; {{ pct }}% aligned
+        </div>
+      {% elif pct < 50 %}
+        <div class="score-pill pill-bear">
+          <span class="pill-dot dot-bear"></span>
+          BEARISH &nbsp;|&nbsp; {{ pct }}% aligned
+        </div>
+      {% else %}
+        <div class="score-pill pill-neut">
+          <span class="pill-dot dot-neut"></span>
+          NEUTRAL &nbsp;|&nbsp; {{ pct }}% aligned
+        </div>
+      {% endif %}
+    {% endif %}
+
+    <div class="badge">Updated: <b>{{ last_updated }}</b></div>
+    <div class="badge">History: <b>{{ history|length }} days</b></div>
+  </div>
+</header>
+
+<div class="main">
+
+  {% if history %}
+  {% set latest = history[-1] %}
+  {% set pct = latest.pct_bullish %}
+
+  <!-- ── Summary stats ── -->
+  <div class="stats-row">
+    <div class="stat-box">
+      <div class="stat-val {% if pct >= 70 %}c-bull{% elif pct < 50 %}c-bear{% else %}c-neut{% endif %}">{{ pct }}%</div>
+      <div class="stat-lbl">Today's Breadth Score</div>
+    </div>
+    {% set bull_count = namespace(n=0) %}
+    {% set bear_count = namespace(n=0) %}
+    {% for t, _ in bull_etfs %}
+      {% if latest.signals.get(t) == 'Bull' %}{% set bull_count.n = bull_count.n + 1 %}{% endif %}
+    {% endfor %}
+    {% for t, _ in bear_etfs %}
+      {% if latest.signals.get(t) == 'Bear' %}{% set bear_count.n = bear_count.n + 1 %}{% endif %}
+    {% endfor %}
+    <div class="stat-box">
+      <div class="stat-val c-bull">{{ bull_count.n }}/21</div>
+      <div class="stat-lbl">Bull ETFs → Bull Signal</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val c-bull">{{ bear_count.n }}/21</div>
+      <div class="stat-lbl">Bear ETFs → Bear Signal</div>
+    </div>
+    {% if history|length >= 5 %}
+      {% set prev = history[-5].pct_bullish %}
+      {% set chg = pct - prev %}
+      <div class="stat-box">
+        <div class="stat-val {% if chg > 0 %}c-bull{% elif chg < 0 %}c-bear{% else %}c-neut{% endif %}">
+          {% if chg > 0 %}+{% endif %}{{ chg|round(1) }}%
+        </div>
+        <div class="stat-lbl">5-Day Change</div>
+      </div>
+    {% endif %}
+    {% set bull_days = history | selectattr('pct_bullish', 'ge', 70) | list | length %}
+    <div class="stat-box">
+      <div class="stat-val c-bull">{{ bull_days }}</div>
+      <div class="stat-lbl">Bullish Days (≥70%)</div>
+    </div>
+  </div>
+
+  <!-- ── Line Chart ── -->
+  <div class="card">
+    <div class="card-header">
+      <span>% Bullish Over Time</span>
+      <span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;">
+        Green zone ≥70% · Grey zone 50-70% · Red zone &lt;50%
+      </span>
+    </div>
+    <div class="card-body" style="padding-bottom:6px;">
+      <div id="chart-wrap">
+        <canvas id="breadth-chart"></canvas>
+      </div>
+    </div>
+    <div class="zone-legend">
+      <div class="zl-item"><div class="zl-swatch zl-bull-s"></div><span>Bullish ≥70%</span></div>
+      <div class="zl-item"><div class="zl-swatch zl-neut-s"></div><span>Neutral 50–70%</span></div>
+      <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;50%</span></div>
+    </div>
+  </div>
+
+  <!-- ── History bar strip ── -->
+  <div class="card">
+    <div class="card-header">Recent History — Daily % Bullish</div>
+    <div class="card-body">
+      <div class="history-strip" id="hist-strip">
+        {% for entry in history[-40:] %}
+          {% set p = entry.pct_bullish %}
+          {% if p >= 70 %}{% set bc = '#15803d' %}
+          {% elif p < 50 %}{% set bc = '#991b1b' %}
+          {% else %}{% set bc = '#6b7280' %}{% endif %}
+          <div class="hs-bar-wrap"
+               data-date="{{ entry.date }}"
+               data-pct="{{ p }}">
+            <div class="hs-pct">{{ p|int }}%</div>
+            <div class="hs-bar"
+                 style="height:{{ [(p / 100 * 80)|int, 8]|max }}px; background:{{ bc }};"
+                 title="{{ entry.date }}: {{ p }}%">
+            </div>
+            <div class="hs-date">{{ entry.date[5:] }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Today's Heatmap ── -->
+  <div class="card">
+    <div class="card-header">Today's Signal Heatmap — {{ latest.date }}</div>
+    <div class="card-body">
+      <div class="heatmap-section">
+
+        <!-- Bull ETFs -->
+        <div>
+          <div class="hm-group-label">📈 Bullish ETFs — correct when signal = Bull</div>
+          <div class="hm-grid">
+            {% for ticker, name in bull_etfs %}
+              {% set sig = latest.signals.get(ticker, '—') %}
+              {% if sig == 'Bull' %}{% set cls = 'hm-bull' %}
+              {% elif sig == 'Bear' %}{% set cls = 'hm-bear' %}
+              {% else %}{% set cls = 'hm-na' %}{% endif %}
+              <div class="hm-cell {{ cls }}">
+                <div class="hm-ticker">{{ ticker }}</div>
+                <div class="hm-name">{{ name }}</div>
+                <div class="hm-sig">{% if sig == 'Bull' %}▲ Bull{% elif sig == 'Bear' %}▼ Bear{% else %}—{% endif %}</div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Bear ETFs -->
+        <div>
+          <div class="hm-group-label">📉 Inverse/Bear ETFs — correct when signal = Bear</div>
+          <div class="hm-grid">
+            {% for ticker, name in bear_etfs %}
+              {% set sig = latest.signals.get(ticker, '—') %}
+              {% if sig == 'Bear' %}{% set cls = 'hm-bull' %}
+              {% elif sig == 'Bull' %}{% set cls = 'hm-bear' %}
+              {% else %}{% set cls = 'hm-na' %}{% endif %}
+              <div class="hm-cell {{ cls }}">
+                <div class="hm-ticker">{{ ticker }}</div>
+                <div class="hm-name">{{ name }}</div>
+                <div class="hm-sig">
+                  {% if sig == 'Bear' %}✓ Bear (correct)
+                  {% elif sig == 'Bull' %}✗ Bull (wrong)
+                  {% else %}—{% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  {% else %}
+  <div style="text-align:center;padding:60px;color:var(--muted);">
+    <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+    <div style="font-size:16px;font-weight:600;">Building historical data...</div>
+    <div style="margin-top:6px;">Page will refresh automatically when ready.</div>
+  </div>
+  {% endif %}
+
+</div>
+
+<div id="tooltip"></div>
+
+<footer>
+  Data: Yahoo Finance &nbsp;|&nbsp; Indicator: Matrix Series (Pine Script port, smoother=5) &nbsp;|&nbsp;
+  Breadth = % of 42 ETF pairs aligned with expected direction &nbsp;|&nbsp;
+  Refreshes daily after market close
+</footer>
+
+<!-- Chart.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+{% if history %}
+// ── Build chart data ──────────────────────────────────────────────────────────
+const historyData = {{ history | tojson }};
+
+const labels = historyData.map(d => d.date);
+const values = historyData.map(d => d.pct_bullish);
+
+// Color each point
+const pointColors = values.map(v =>
+  v >= 70 ? '#15803d' : v < 50 ? '#991b1b' : '#6b7280'
+);
+
+const ctx = document.getElementById('breadth-chart').getContext('2d');
+
+// Zone background plugin
+const zonePlugin = {
+  id: 'zoneBackground',
+  beforeDraw(chart) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea) return;
+    const yScale = scales.y;
+    const getY = v => yScale.getPixelForValue(v);
+
+    // Bull zone (70-100) — green
+    ctx.fillStyle = 'rgba(21,128,61,0.10)';
+    ctx.fillRect(chartArea.left, getY(100), chartArea.width, getY(70) - getY(100));
+
+    // Neutral zone (50-70) — grey
+    ctx.fillStyle = 'rgba(100,116,139,0.07)';
+    ctx.fillRect(chartArea.left, getY(70), chartArea.width, getY(50) - getY(70));
+
+    // Bear zone (0-50) — red
+    ctx.fillStyle = 'rgba(153,27,27,0.10)';
+    ctx.fillRect(chartArea.left, getY(50), chartArea.width, getY(0) - getY(50));
+  }
+};
+
+// Segment coloring for line
+function segmentColor(ctx) {
+  const v = ctx.p1.parsed.y;
+  return v >= 70 ? '#15803d' : v < 50 ? '#dc2626' : '#6b7280';
+}
+
+new Chart(ctx, {
+  type: 'line',
+  plugins: [zonePlugin],
+  data: {
+    labels,
+    datasets: [{
+      data: values,
+      borderColor: '#2563eb',
+      borderWidth: 2,
+      pointRadius: values.length > 60 ? 2 : 4,
+      pointBackgroundColor: pointColors,
+      pointBorderColor: pointColors,
+      fill: false,
+      tension: 0.3,
+      segment: {
+        borderColor: segmentColor,
+      }
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => `${ctx.parsed.y}% bullish`,
+          afterLabel: ctx => {
+            const v = ctx.parsed.y;
+            return v >= 70 ? '▲ Bullish regime' : v < 50 ? '▼ Bearish regime' : '◆ Neutral';
+          }
+        }
+      }
+    },
+    scales: {
+      x: {
+        ticks: {
+          maxTicksLimit: 20,
+          font: { size: 10 },
+          color: '#6b7280',
+          maxRotation: 45,
+        },
+        grid: { color: '#e5e7eb' }
+      },
+      y: {
+        min: 0,
+        max: 100,
+        ticks: {
+          stepSize: 10,
+          font: { size: 10 },
+          color: '#6b7280',
+          callback: v => v + '%'
+        },
+        grid: { color: '#e5e7eb' }
+      }
+    }
+  }
+});
+
+// ── Scroll history strip to end ───────────────────────────────────────────────
+const strip = document.getElementById('hist-strip');
+if (strip) strip.scrollLeft = strip.scrollWidth;
+
+{% endif %}
+</script>
+</body>
+</html>
