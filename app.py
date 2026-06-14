@@ -184,7 +184,8 @@ def fetch_signals_for_range(trading_days: list[str]) -> dict:
     # Need extra history to warm up the EMA (smoother=5, triple EMA → ~40 bars)
     warmup    = 60
     start_dt  = (datetime.strptime(trading_days[0], "%Y-%m-%d") - timedelta(days=warmup * 2)).strftime("%Y-%m-%d")
-    end_dt    = trading_days[-1]
+    # yfinance 'end' is exclusive — add 1 day so we include the last trading day
+    end_dt    = (datetime.strptime(trading_days[-1], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
 
     results   = {d: {} for d in trading_days}
     spy_closes = {}   # date_str -> SPY close price
@@ -222,20 +223,23 @@ def fetch_signals_for_range(trading_days: list[str]) -> dict:
         except Exception as e:
             print(f"    ERR {ticker}: {e}")
 
+        time.sleep(0.3)  # polite rate limiting
+
     # Attach SPY close to each day's results
     for day in trading_days:
         results[day]["spy_close"] = spy_closes.get(day)
 
-        time.sleep(0.3)  # polite rate limiting
-
     # Compute % Bullish for each day
     for day in trading_days:
         sigs = results[day]
-        if not sigs:
+        # Count only actual ticker signals (exclude metadata keys)
+        ticker_sigs = {k: v for k, v in sigs.items() if k in BULL_SET or k in BEAR_SET}
+        if len(ticker_sigs) < 10:
+            # Not enough data for this day (likely holiday/missing)
             results[day]["pct_bullish"] = None
             continue
         bullish_count = sum(
-            1 for t, s in sigs.items()
+            1 for t, s in ticker_sigs.items()
             if (t in BULL_SET and s == "Bull") or (t in BEAR_SET and s == "Bear")
         )
         results[day]["pct_bullish"] = round(bullish_count / TOTAL * 100, 1)
