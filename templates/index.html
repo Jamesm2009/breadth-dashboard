@@ -110,7 +110,7 @@ header {
 .chart-body { padding: 12px 14px 8px; }
 
 /* ── Line chart ── */
-#chart-wrap { position: relative; height: 260px; }
+#chart-wrap { position: relative; height: 300px; }
 canvas#breadth-chart { width: 100% !important; height: 100% !important; }
 
 .zone-legend {
@@ -600,7 +600,7 @@ new Chart(lineCtx, {
     datasets: [
       // Breadth % (left axis)
       {
-        label: '% Bullish',
+        label: '% Bullish Breadth',
         data: values,
         yAxisID: 'y',
         borderWidth: 2,
@@ -614,12 +614,12 @@ new Chart(lineCtx, {
       },
       // SPY close price (right axis)
       {
-        label: 'SPY',
+        label: 'SPY Close ($)',
         data: spyValues,
         yAxisID: 'ySpy',
         borderColor: '#f59e0b',
-        borderWidth: 1.5,
-        borderDash: [4, 3],
+        borderWidth: 2,
+        borderDash: [6, 3],
         pointRadius: 0,
         fill: false,
         tension: 0.2,
@@ -636,19 +636,18 @@ new Chart(lineCtx, {
         position: 'top',
         align: 'end',
         labels: {
-          boxWidth: 16, font: { size: 11 }, color: '#6b7280',
-          generateLabels: chart => [
-            { text: '% Bullish breadth', strokeStyle: '#2563eb', fillStyle: '#2563eb', lineWidth: 2 },
-            { text: 'SPY close price', strokeStyle: '#f59e0b', fillStyle: '#f59e0b', lineWidth: 1.5, lineDash: [4,3] },
-          ]
+          boxWidth: 20, boxHeight: 3, padding: 16,
+          font: { size: 11.5, weight: '600' },
+          color: '#374151',
+          usePointStyle: false,
         }
       },
       tooltip: {
         callbacks: {
-          label: c => c.dataset.label === 'SPY'
+          label: c => c.dataset.label.includes('SPY')
             ? `SPY $${c.parsed.y}`
             : `${c.parsed.y}% bullish`,
-          afterLabel: c => c.dataset.label === 'SPY' ? '' :
+          afterLabel: c => c.dataset.label.includes('SPY') ? '' :
             c.parsed.y >= 70 ? '▲ Bullish regime' : c.parsed.y < 50 ? '▼ Bearish regime' : '◆ Neutral'
         }
       }
