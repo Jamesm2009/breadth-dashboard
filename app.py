@@ -187,6 +187,7 @@ def fetch_signals_for_range(trading_days: list[str]) -> dict:
     end_dt    = trading_days[-1]
 
     results   = {d: {} for d in trading_days}
+    spy_closes = {}   # date_str -> SPY close price
     total     = len(ALL_TICKERS)
 
     for i, ticker in enumerate(ALL_TICKERS):
@@ -207,14 +208,23 @@ def fetch_signals_for_range(trading_days: list[str]) -> dict:
 
             signals = matrix_signal_series(h, l, c)
             # Convert index to date strings
-            sig_map = {str(d.date()): s for d, s in signals.items()}
+            sig_map   = {str(d.date()): s for d, s in signals.items()}
+            close_map = {str(d.date()): round(float(v), 2) for d, v in c.items()}
 
             for day in trading_days:
                 if day in sig_map:
                     results[day][ticker] = sig_map[day]
 
+            # Capture SPY closes for chart overlay
+            if ticker == "SPY":
+                spy_closes = close_map
+
         except Exception as e:
             print(f"    ERR {ticker}: {e}")
+
+    # Attach SPY close to each day's results
+    for day in trading_days:
+        results[day]["spy_close"] = spy_closes.get(day)
 
         time.sleep(0.3)  # polite rate limiting
 
@@ -267,8 +277,9 @@ def run_seed_load():
             pct = results[day].get("pct_bullish")
             if pct is None:
                 continue
-            sigs = {k: v for k, v in results[day].items() if k != "pct_bullish"}
-            history.append({"date": day, "pct_bullish": pct, "signals": sigs})
+            spy = results[day].get("spy_close")
+            sigs = {k: v for k, v in results[day].items() if k not in ("pct_bullish", "spy_close")}
+            history.append({"date": day, "pct_bullish": pct, "spy_close": spy, "signals": sigs})
 
         with _lock:
             cache["history"]      = history
@@ -311,8 +322,9 @@ def run_daily_refresh():
                 cache["progress"] = "No data for today yet"
             return
 
-        sigs = {k: v for k, v in results[today].items() if k != "pct_bullish"}
-        entry = {"date": today, "pct_bullish": pct, "signals": sigs}
+        spy = results[today].get("spy_close")
+        sigs = {k: v for k, v in results[today].items() if k not in ("pct_bullish", "spy_close")}
+        entry = {"date": today, "pct_bullish": pct, "spy_close": spy, "signals": sigs}
 
         with _lock:
             # Replace today's entry if it exists, else append
