@@ -632,6 +632,23 @@ new Chart(lineCtx, {
         categoryPercentage: 0.9,
         order: 3,
       }
+      // SPY volume 20-day moving average
+      {
+        type: 'line',
+        label: 'Vol 20 DMA',
+        data: volValues.map((v, i) => {
+          if (i < 19) return null;
+          const slice = volValues.slice(i - 19, i + 1).filter(x => x !== null);
+          return slice.length >= 15 ? Math.round(slice.reduce((a, b) => a + b, 0) / slice.length) : null;
+        }),
+        yAxisID: 'yVol',
+        borderColor: '#94a3b8',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: false,
+        tension: 0.3,
+        order: 3,
+      },
     ]
   },
   options: {
