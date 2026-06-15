@@ -301,7 +301,7 @@ footer {
     </div>
   {% endif %}
   <div class="stat-box">
-    <div class="stat-val c-bull">{{ history | selectattr('pct_bullish', 'ge', 70) | list | length }}</div>
+    <div class="stat-val c-bull">{{ history | selectattr('pct_bullish', 'ge', 60) | list | length }}</div>
     <div class="stat-lbl">Bullish Days (≥60%)</div>
   </div>
 </div>
@@ -322,7 +322,7 @@ footer {
       <div class="zone-legend">
         <div class="zl-item"><div class="zl-swatch zl-bull-s"></div><span>Bullish ≥60%</span></div>
         <div class="zl-item"><div class="zl-swatch zl-neut-s"></div><span>Neutral 40–60%</span></div>
-        <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;<40%</span></div>
+        <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;40%</span></div>
         <div class="zl-item"><div class="zl-swatch" style="background:#475569;"></div><span>SPY price (right axis)</span></div>
         <div class="zl-item"><div class="zl-swatch" style="background:rgba(148,163,184,0.45);"></div><span>SPY volume</span></div>
       </div>
@@ -488,7 +488,7 @@ Correct alignment =<br>
   <table class="zone-table">
     <thead><tr><th>Zone</th><th>Score</th><th>Interpretation</th></tr></thead>
     <tbody>
-      <tr><td style="color:#15803d;font-weight:700;">● Bullish</td><td>≥ 70%</td><td>Strong majority of ETF pairs aligned bullishly — risk-on regime</td></tr>
+      <tr><td style="color:#15803d;font-weight:700;">● Bullish</td><td>≥ 60%</td><td>Strong majority of ETF pairs aligned bullishly — risk-on regime</td></tr>
       <tr><td style="color:#374151;font-weight:700;">◆ Neutral</td><td>40–60%</td><td>Mixed signals — transition or consolidation phase</td></tr>
       <tr><td style="color:#991b1b;font-weight:700;">● Bearish</td><td>&lt; 40%</td><td>Majority misaligned — risk-off or bearish regime</td></tr>
     </tbody>
