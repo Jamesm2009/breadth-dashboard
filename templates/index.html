@@ -664,7 +664,7 @@ new Chart(lineCtx, {
           font: { size: 11.5, weight: '600' },
           color: '#374151',
           usePointStyle: false,
-          filter: item => item.text !== 'SPY Volume (M)',
+          filter: item => !item.text.includes('Vol'),
         }
       },
       tooltip: {
