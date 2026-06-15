@@ -341,7 +341,7 @@ footer {
         <tr>
           <th class="col-ticker">Ticker</th>
           <th class="col-name">Name</th>
-          {% for entry in history %}
+          {% for entry in history[-252:] %}
             <th>{{ entry.date[5:] }}</th>
           {% endfor %}
         </tr>
@@ -349,7 +349,7 @@ footer {
         <tr class="pct-row">
           <td class="col-ticker" style="color:#64748b;font-size:10px;">% Bullish</td>
           <td class="col-name" style="background:#0f172a;color:#64748b;font-size:10px;">Breadth Score</td>
-          {% for entry in history %}
+          {% for entry in history[-252:] %}
             {% set p = entry.pct_bullish %}
             <td class="{% if p >= 70 %}pct-hi{% elif p < 50 %}pct-lo{% else %}pct-mid{% endif %}">
               {{ p|int }}%
@@ -366,7 +366,7 @@ footer {
         <tr>
           <td class="col-ticker">{{ ticker }}</td>
           <td class="col-name">{{ name }}</td>
-          {% for entry in history %}
+          {% for entry in history[-252:] %}
             {% set sig = entry.signals.get(ticker, '') %}
             {% if sig == 'Bull' %}
               <td class="sig-bull">▲</td>
@@ -382,7 +382,7 @@ footer {
         <tr class="count-row">
           <td class="col-ticker" style="color:#64748b;font-size:10px;">Count</td>
           <td style="background:#1e2d45;color:#64748b;font-size:10px;">Bull signals</td>
-          {% for entry in history %}
+          {% for entry in history[-252:] %}
             {% set cnt = namespace(n=0) %}
             {% for t, _ in bull_etfs %}{% if entry.signals.get(t) == 'Bull' %}{% set cnt.n = cnt.n + 1 %}{% endif %}{% endfor %}
             <td>{{ cnt.n }}</td>
@@ -397,7 +397,7 @@ footer {
         <tr>
           <td class="col-ticker">{{ ticker }}</td>
           <td class="col-name">{{ name }}</td>
-          {% for entry in history %}
+          {% for entry in history[-252:] %}
             {% set sig = entry.signals.get(ticker, '') %}
             {% if sig == 'Bear' %}
               <td class="sig-bear-inv">▼</td>
@@ -413,7 +413,7 @@ footer {
         <tr class="count-row">
           <td class="col-ticker" style="color:#64748b;font-size:10px;">Count</td>
           <td style="background:#1e2d45;color:#64748b;font-size:10px;">Bear signals</td>
-          {% for entry in history %}
+          {% for entry in history[-252:] %}
             {% set cnt = namespace(n=0) %}
             {% for t, _ in bear_etfs %}{% if entry.signals.get(t) == 'Bear' %}{% set cnt.n = cnt.n + 1 %}{% endif %}{% endfor %}
             <td>{{ cnt.n }}</td>
@@ -534,7 +534,7 @@ function switchTab(name) {
 }
 
 {% if history %}
-const historyData = {{ history | tojson }};
+const historyData = {{ history[-252:] | tojson }};
 const labels = historyData.map(d => d.date.slice(5));   // MM-DD
 const values = historyData.map(d => d.pct_bullish);
 const N = values.length;
