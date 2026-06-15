@@ -272,7 +272,7 @@ def run_seed_load():
 
     try:
         today      = date.today()
-        start      = today - timedelta(days=90)  # ~60 trading days
+        start = today - timedelta(days=370)  # ~252 trading days
         days       = get_trading_days(start, today)
 
         print(f"  Seed load: {len(days)} calendar days from {days[0]} to {days[-1]}")
