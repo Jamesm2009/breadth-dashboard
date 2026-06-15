@@ -1,430 +1,697 @@
-"""
-Market Breadth Dashboard — Matrix Series Bull/Bear Signal
-Computes the Matrix Series indicator (Pine Script port) using yFinance OHLC data.
-Signal: up > down = Bull, up < down = Bear
-% Bullish = (bull ETFs reading Bull + bear ETFs reading Bear) / 42 * 100
-Stores daily history in Upstash Redis. Seed load on first boot (60 days).
-Daily refresh via /refresh cron after market close.
-"""
-
-from flask import Flask, render_template, jsonify
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import threading
-import time
-import json
-import os
-from datetime import datetime, date, timedelta
-from zoneinfo import ZoneInfo
-
-app = Flask(__name__)
-CT = ZoneInfo("America/Chicago")
-
-REDIS_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
-REDIS_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
-REDIS_KEY   = "breadth_history_v1"
-
-# ── Ticker lists ──────────────────────────────────────────────────────────────
-# For bull ETFs: Bull signal = correct (bullish breadth)
-# For bear ETFs: Bear signal = correct (bullish breadth = inverse reading)
-
-BULL_ETFS = [
-    ("TQQQ",  "UltraPro QQQ 3x"),
-    ("SPXL",  "S&P 500 Bull 3X"),
-    ("TNA",   "Small Cap Bull 3X"),
-    ("WEBL",  "DJ Internet Bull 3X"),
-    ("FAS",   "Financial Bull 3X"),
-    ("HIBL",  "S&P High Beta Bull 3X"),
-    ("LABU",  "S&P Biotech Bull 3X"),
-    ("SOXL",  "Semiconductor Bull 3X"),
-    ("TECL",  "Technology Bull 3X"),
-    ("SPY",   "SPDR S&P 500"),
-    ("QQQ",   "Nasdaq-100"),
-    ("ERX",   "Energy Bull 2X"),
-    ("GUSH",  "Oil & Gas Bull 2X"),
-    ("NUGT",  "Gold Miners Bull 2X"),
-    ("TMF",   "20Y Treasury Bull 3X"),
-    ("TYD",   "7-10Y Treasury Bull 3X"),
-    ("UUP",   "USD Index Bullish"),
-    ("DRN",   "Real Estate Bull 3X"),
-    ("YINN",  "FTSE China Bull 3X"),
-    ("EDC",   "Emerging Mkts Bull 3X"),
-    ("BULZ",  "FANG & Innov. 3X"),
-]
-
-BEAR_ETFS = [
-    ("SQQQ",  "Short QQQ -3X"),
-    ("SPXS",  "S&P 500 Bear -3X"),
-    ("TZA",   "Small Cap Bear 3X"),
-    ("WEBS",  "DJ Internet Bear -3X"),
-    ("FAZ",   "Financial Bear 3X"),
-    ("HIBS",  "S&P High Beta Bear 3X"),
-    ("LABD",  "S&P Biotech Bear 3X"),
-    ("SOXS",  "Semiconductor Bear 3X"),
-    ("TECS",  "Technology Bear -3X"),
-    ("SH",    "S&P500 -1X"),
-    ("PSQ",   "Short QQQ -1X"),
-    ("ERY",   "Energy Bear -2X"),
-    ("DRIP",  "Oil & Gas Bear 2X"),
-    ("DUST",  "Gold Miners Bear -2X"),
-    ("TMV",   "20Y Treasury Bear -3X"),
-    ("TYO",   "7-10Y Treasury Bear -3X"),
-    ("UDN",   "USD Index Bearish -1X"),
-    ("DRV",   "Real Estate Bear -3X"),
-    ("YANG",  "FTSE China Bear -3X"),
-    ("EDZ",   "Emerging Mkts Bear -3X"),
-    ("BERZ",  "FANG & Innov. 3X Inv."),
-]
-
-ALL_TICKERS = [t for t, _ in BULL_ETFS] + [t for t, _ in BEAR_ETFS]
-BULL_SET    = {t for t, _ in BULL_ETFS}
-BEAR_SET    = {t for t, _ in BEAR_ETFS}
-TOTAL       = len(ALL_TICKERS)  # 42
-
-# ── In-memory cache ───────────────────────────────────────────────────────────
-cache = {
-    "history":      [],   # list of {date, pct_bullish, signals: {ticker: "Bull"/"Bear"}}
-    "last_updated": "—",
-    "phase":        0,    # 0=idle, 1=loading, 4=ready
-    "progress":     "Starting...",
-    "error":        None,
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Levered ETF Market Breadth — Matrix Series</title>
+<style>
+:root {
+  --bg:      #eef1f6;
+  --surface: #ffffff;
+  --header:  #0f2240;
+  --border:  #d0d7e3;
+  --text:    #1a2035;
+  --muted:   #6b7280;
+  --accent:  #2563eb;
+  --bull:    #15803d;
+  --bear:    #991b1b;
+  --neut:    #374151;
 }
-_lock    = threading.Lock()
-_started = False
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13.5px; }
 
+/* ── Header ── */
+header {
+  background: var(--header); color: #fff;
+  padding: 10px 18px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  position: sticky; top: 0; z-index: 30;
+  box-shadow: 0 2px 10px rgba(0,0,0,.3);
+}
+.h-title { font-size: 16px; font-weight: 700; }
+.h-sub   { font-size: 10.5px; color: #93c5fd; margin-top: 2px; }
+.h-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.badge   { background: rgba(255,255,255,.12); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: #cbd5e1; }
+.badge b { color: #fff; }
+.score-pill { border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.pill-bull { background: #166534; color: #bbf7d0; }
+.pill-bear { background: #991b1b; color: #fecaca; }
+.pill-neut { background: #374151; color: #d1d5db; }
+.pill-dot  { width: 9px; height: 9px; border-radius: 50%; }
+.dot-bull  { background: #4ade80; }
+.dot-bear  { background: #f87171; }
+.dot-neut  { background: #9ca3af; }
 
-# ── Redis helpers ─────────────────────────────────────────────────────────────
+/* ── Tabs ── */
+.tab-bar {
+  background: #1e2d45; display: flex; gap: 2px; padding: 0 14px;
+  border-bottom: 2px solid #334155;
+}
+.tab-btn {
+  background: none; border: none; color: #93c5fd;
+  padding: 8px 18px; font-size: 12px; font-weight: 600;
+  cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -2px; transition: color .15s;
+  letter-spacing: .3px;
+}
+.tab-btn:hover { color: #fff; }
+.tab-btn.active { color: #fff; border-bottom-color: #2563eb; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
 
-import requests as _req
+/* ── Loading ── */
+#loading-banner {
+  background: #1e40af; color: #fff;
+  padding: 10px 16px; font-size: 12.5px;
+  display: flex; align-items: center; gap: 12px; justify-content: center;
+}
 
-def _rget(key):
-    if not REDIS_URL or not REDIS_TOKEN:
-        return None
-    try:
-        r = _req.get(f"{REDIS_URL}/get/{key}",
-                     headers={"Authorization": f"Bearer {REDIS_TOKEN}"}, timeout=10)
-        if r.status_code != 200:
-            return None
-        result = r.json().get("result")
-        return json.loads(result) if result else None
-    except Exception as e:
-        print(f"  Redis GET error: {e}")
-        return None
+/* ── Layout ── */
+.main { padding: 14px 14px 30px; display: flex; flex-direction: column; gap: 16px; }
 
+/* ── Cards ── */
+.card { background: var(--surface); border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
+.card-header {
+  background: #1e2d45; color: #93c5fd;
+  padding: 8px 14px; font-size: 11px; font-weight: 700;
+  letter-spacing: .4px; text-transform: uppercase;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.card-body { padding: 14px; }
 
-def _rset(key, value, ex=90000):
-    if not REDIS_URL or not REDIS_TOKEN:
-        return False
-    try:
-        r = _req.post(
-            f"{REDIS_URL}/pipeline",
-            headers={"Authorization": f"Bearer {REDIS_TOKEN}",
-                     "Content-Type": "application/json"},
-            data=json.dumps([["SET", key, json.dumps(value), "EX", ex]]),
-            timeout=15
-        )
-        return r.status_code == 200
-    except Exception as e:
-        print(f"  Redis SET error: {e}")
-        return False
+/* ── Stats row ── */
+.stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.stat-box  { background: var(--surface); border-radius: 8px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,.07); text-align: center; }
+.stat-val  { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.stat-lbl  { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.c-bull { color: var(--bull); } .c-bear { color: var(--bear); } .c-neut { color: var(--neut); }
 
+/* ── Charts — shared scroll container ── */
+.charts-scroll-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+.charts-inner {
+  min-width: 900px;
+  padding: 0;
+}
+.chart-section {
+  border-bottom: 1px solid var(--border);
+}
+.chart-section:last-child { border-bottom: none; }
+.chart-section-header {
+  background: #1e2d45; color: #93c5fd;
+  padding: 7px 14px; font-size: 11px; font-weight: 700;
+  letter-spacing: .4px; text-transform: uppercase;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.chart-body { padding: 12px 14px 8px; }
 
-def save_history():
-    ok = _rset(REDIS_KEY, cache["history"], ex=60 * 60 * 24 * 90)  # 90 days
-    print(f"  Redis save: {'OK' if ok else 'FAILED'} ({len(cache['history'])} days)")
+/* ── Line chart ── */
+#chart-wrap { position: relative; height: 380px; }
+canvas#breadth-chart { width: 100% !important; height: 100% !important; }
 
+.zone-legend {
+  display: flex; gap: 16px; padding: 6px 14px 10px;
+  font-size: 11px; color: var(--muted);
+}
+.zl-item { display: flex; align-items: center; gap: 5px; }
+.zl-swatch { width: 14px; height: 10px; border-radius: 2px; }
+.zl-bull-s { background: rgba(21,128,61,.35); }
+.zl-neut-s { background: rgba(100,116,139,.18); }
+.zl-bear-s { background: rgba(153,27,27,.30); }
 
-def load_history():
-    print("  Checking Redis for history...")
-    data = _rget(REDIS_KEY)
-    if not data:
-        print("  No history found.")
-        return False
-    cache["history"] = data
-    print(f"  Loaded {len(data)} days from Redis.")
-    return True
+/* ── Heatmap table ── */
+.hm-scroll { overflow-x: auto; }
+.hm-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  white-space: nowrap;
+  width: 100%;
+}
+.hm-table th {
+  background: #1e2d45; color: #93c5fd;
+  padding: 5px 7px; font-size: 10px; font-weight: 700;
+  text-align: center; position: sticky; top: 0;
+  border-right: 1px solid #334155;
+}
+.hm-table th.col-ticker { text-align: left; min-width: 54px; position: sticky; left: 0; z-index: 2; background: #1e2d45; }
+.hm-table th.col-name   { text-align: left; min-width: 160px; }
+.hm-table td {
+  padding: 4px 6px; border-right: 1px solid #f0f0f0;
+  border-bottom: 1px solid #f0f0f0; text-align: center;
+}
+.hm-table td.col-ticker {
+  font-weight: 800; font-family: 'Courier New', monospace;
+  font-size: 11.5px; color: var(--accent);
+  text-align: left; position: sticky; left: 0; background: #fff;
+  border-right: 1px solid var(--border);
+  z-index: 1;
+}
+.hm-table td.col-name {
+  text-align: left; color: var(--muted); font-size: 10.5px;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+}
+.hm-table tr:hover td { background: #f0f7ff !important; }
+.hm-table tr.group-header td {
+  background: #f1f5f9; color: var(--muted);
+  font-size: 10px; font-weight: 700; letter-spacing: .4px;
+  text-transform: uppercase; padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.hm-table tr.pct-row td {
+  background: #0f172a; font-weight: 800; font-size: 11px;
+  border-bottom: 2px solid #334155;
+}
+.hm-table tr.pct-row td.col-ticker { background: #0f172a; color: #64748b; }
 
+/* Signal cells */
+.sig-bull     { background: #dcfce7 !important; color: #15803d; font-weight: 700; }
+.sig-bear     { background: #fee2e2 !important; color: #991b1b; font-weight: 700; }
+.sig-bull-inv { background: #fee2e2 !important; color: #991b1b; font-weight: 700; }
+.sig-bear-inv { background: #dcfce7 !important; color: #15803d; font-weight: 700; }
+.sig-na       { color: var(--muted); }
 
-# ── Matrix Series calculation ─────────────────────────────────────────────────
+/* Pct cell colors in heatmap header row */
+.pct-hi   { color: #4ade80; }
+.pct-mid  { color: #d1d5db; }
+.pct-lo   { color: #f87171; }
 
-def matrix_signal_series(h: pd.Series, l: pd.Series, c: pd.Series, smoother=5):
-    """
-    Port of Pine Script Matrix Series indicator.
-    Returns a Series of 'Bull'/'Bear' strings indexed by date.
-    ys1 = (H+L+C*2)/4
-    rk3 = EMA(ys1, n)
-    rk4 = StdDev(ys1, n)
-    rk5 = (ys1 - rk3) * 200 / rk4
-    rk6 = EMA(rk5, n)
-    up   = EMA(rk6, n)
-    down = EMA(up, n)
-    signal: up > down -> Bull, else Bear
-    """
-    n    = smoother
-    ys1  = (h + l + c * 2) / 4
-    rk3  = ys1.ewm(span=n, adjust=False).mean()
-    rk4  = ys1.rolling(n).std()
-    # Avoid division by zero on early bars
-    rk5  = ((ys1 - rk3) * 200 / rk4).fillna(0)
-    rk6  = rk5.ewm(span=n, adjust=False).mean()
-    up   = rk6.ewm(span=n, adjust=False).mean()
-    down = up.ewm(span=n, adjust=False).mean()
-    return pd.Series(
-        np.where(up > down, "Bull", "Bear"),
-        index=c.index
-    )
+/* Count row */
+.hm-table tr.count-row td {
+  background: #1e2d45; color: #93c5fd;
+  font-weight: 700; font-size: 11px;
+  border-bottom: 1px solid #334155;
+}
+.hm-table tr.count-row td.col-ticker { background: #1e2d45; color: #64748b; }
 
+/* ── How It Works tab ── */
+.how-section { max-width: 780px; margin: 0 auto; }
+.how-section h2 { font-size: 15px; font-weight: 700; margin: 20px 0 8px; color: var(--text); }
+.how-section h3 { font-size: 13px; font-weight: 700; margin: 16px 0 6px; color: #1e40af; }
+.how-section p  { font-size: 13px; line-height: 1.65; color: #374151; margin-bottom: 8px; }
+.how-section ul { padding-left: 20px; margin-bottom: 8px; }
+.how-section li { font-size: 13px; line-height: 1.7; color: #374151; }
+.formula-box {
+  background: #0f172a; color: #93c5fd;
+  border-radius: 8px; padding: 14px 18px;
+  font-family: 'Courier New', monospace; font-size: 12px;
+  line-height: 1.8; margin: 10px 0 16px;
+}
+.zone-table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 13px; }
+.zone-table th { background: #1e2d45; color: #93c5fd; padding: 7px 12px; text-align: left; }
+.zone-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
+.zone-table tr:nth-child(even) td { background: #f8fafc; }
 
-def fetch_signals_for_range(trading_days: list[str]) -> dict:
-    """
-    Fetch OHLC for all 42 tickers, compute Matrix Series for each day in trading_days.
-    Returns: {date_str: {ticker: "Bull"/"Bear", ..., "pct_bullish": float}}
-    """
-    # Need extra history to warm up the EMA (smoother=5, triple EMA → ~40 bars)
-    warmup    = 60
-    start_dt  = (datetime.strptime(trading_days[0], "%Y-%m-%d") - timedelta(days=warmup * 2)).strftime("%Y-%m-%d")
-    # yfinance 'end' is exclusive — add 1 day so we include the last trading day
-    end_dt    = (datetime.strptime(trading_days[-1], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+footer {
+  text-align: center; padding: 14px; color: var(--muted);
+  font-size: 11px; border-top: 1px solid var(--border);
+  background: var(--surface); margin-top: 8px;
+}
+</style>
+</head>
+<body>
 
-    results   = {d: {} for d in trading_days}
-    spy_closes = {}   # date_str -> SPY close price
-    spy_vols   = {}   # date_str -> SPY volume
-    total     = len(ALL_TICKERS)
+{% if error %}
+<div style="background:#991b1b;color:#fecaca;text-align:center;padding:10px;font-size:13px;font-weight:600;">⚠ Error: {{ error }}</div>
+{% endif %}
 
-    for i, ticker in enumerate(ALL_TICKERS):
-        with _lock:
-            cache["progress"] = f"Fetching {i+1}/{total}: {ticker}"
-        print(f"  [{i+1}/{total}] {ticker}")
+{% if is_loading %}
+<div id="loading-banner">
+  <span>⏳</span>
+  <span>Building breadth history (60 days)... this takes ~3 minutes on first load.</span>
+  <span id="prog" style="opacity:.8">{{ progress }}</span>
+</div>
+<script>
+(function poll(){
+  setTimeout(function(){
+    fetch('/status').then(r=>r.json()).then(d=>{
+      var p=document.getElementById('prog');
+      if(p) p.textContent=d.progress||'';
+      if(d.phase>=4 && d.days>0){ location.reload(); } else { poll(); }
+    }).catch(()=>poll());
+  },4000);
+})();
+</script>
+{% endif %}
 
-        try:
-            df = yf.download(ticker, start=start_dt, end=end_dt,
-                             interval="1d", auto_adjust=True, progress=False)
-            if df.empty or len(df) < 25:
-                print(f"    skip — insufficient data")
-                continue
+<!-- ── Header ── -->
+<header>
+  <div>
+    <div class="h-title">📊 Levered ETF Market Breadth — Matrix Series</div>
+    <div class="h-sub">Bull/Bear signal per ETF via Matrix Series (Pine Script port, smoother=5) &nbsp;|&nbsp; 42 tickers · 21 bull + 21 bear inverse pairs</div>
+  </div>
+  <div class="h-right">
+    {% if history %}
+      {% set pct = history[-1].pct_bullish %}
+      {% if pct >= 70 %}
+        <div class="score-pill pill-bull"><span class="pill-dot dot-bull"></span>BULLISH &nbsp;|&nbsp; {{ pct }}% aligned</div>
+      {% elif pct < 50 %}
+        <div class="score-pill pill-bear"><span class="pill-dot dot-bear"></span>BEARISH &nbsp;|&nbsp; {{ pct }}% aligned</div>
+      {% else %}
+        <div class="score-pill pill-neut"><span class="pill-dot dot-neut"></span>NEUTRAL &nbsp;|&nbsp; {{ pct }}% aligned</div>
+      {% endif %}
+    {% endif %}
+    <div class="badge">Updated: <b>{{ last_updated }}</b></div>
+    <div class="badge">History: <b>{{ history|length }} days</b></div>
+  </div>
+</header>
 
-            h = df["High"].squeeze()
-            l = df["Low"].squeeze()
-            c = df["Close"].squeeze()
+<!-- ── Tab bar ── -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
+  <button class="tab-btn" onclick="switchTab('howto')">How It Works</button>
+</div>
 
-            signals = matrix_signal_series(h, l, c)
-            # Convert index to date strings
-            sig_map   = {str(d.date()): s for d, s in signals.items()}
-            close_map = {str(d.date()): round(float(v), 2) for d, v in c.items()}
+<!-- ══════════════════════════════════════════════════════════════
+     DASHBOARD TAB
+═══════════════════════════════════════════════════════════════ -->
+<div id="tab-dashboard" class="tab-pane active">
+<div class="main">
 
-            for day in trading_days:
-                if day in sig_map:
-                    results[day][ticker] = sig_map[day]
+{% if history %}
+{% set latest = history[-1] %}
+{% set pct = latest.pct_bullish %}
 
-            # Capture SPY closes and volume for chart overlay
-            if ticker == "SPY":
-                spy_closes = close_map
-                spy_vols = {str(d.date()): int(v) for d, v in df["Volume"].squeeze().items()}
+<!-- ── Stats ── -->
+<div class="stats-row">
+  <div class="stat-box">
+    <div class="stat-val {% if pct >= 70 %}c-bull{% elif pct < 50 %}c-bear{% else %}c-neut{% endif %}">{{ pct }}%</div>
+    <div class="stat-lbl">Today's Breadth Score</div>
+  </div>
+  {% set bull_count = namespace(n=0) %}
+  {% set bear_count = namespace(n=0) %}
+  {% for t, _ in bull_etfs %}{% if latest.signals.get(t) == 'Bull' %}{% set bull_count.n = bull_count.n + 1 %}{% endif %}{% endfor %}
+  {% for t, _ in bear_etfs %}{% if latest.signals.get(t) == 'Bear' %}{% set bear_count.n = bear_count.n + 1 %}{% endif %}{% endfor %}
+  <div class="stat-box">
+    <div class="stat-val c-bull">{{ bull_count.n }}/21</div>
+    <div class="stat-lbl">Bull ETFs → Bull Signal</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-val c-bull">{{ bear_count.n }}/21</div>
+    <div class="stat-lbl">Bear ETFs → Bear Signal</div>
+  </div>
+  {% if history|length >= 5 %}
+    {% set chg = pct - history[-5].pct_bullish %}
+    <div class="stat-box">
+      <div class="stat-val {% if chg > 0 %}c-bull{% elif chg < 0 %}c-bear{% else %}c-neut{% endif %}">{% if chg > 0 %}+{% endif %}{{ chg|round(1) }}%</div>
+      <div class="stat-lbl">5-Day Change</div>
+    </div>
+  {% endif %}
+  <div class="stat-box">
+    <div class="stat-val c-bull">{{ history | selectattr('pct_bullish', 'ge', 70) | list | length }}</div>
+    <div class="stat-lbl">Bullish Days (≥70%)</div>
+  </div>
+</div>
 
-        except Exception as e:
-            print(f"    ERR {ticker}: {e}")
+<!-- ── Charts — all in one scrollable container ── -->
+<div class="charts-scroll-wrap">
+  <div class="charts-inner" id="charts-inner">
 
-        time.sleep(0.3)  # polite rate limiting
+    <!-- Line chart -->
+    <div class="chart-section">
+      <div class="chart-section-header">
+        <span>% Bullish Over Time</span>
+        <span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;">Green ≥70% · Grey 50–70% · Red &lt;50%</span>
+      </div>
+      <div class="chart-body">
+        <div id="chart-wrap"><canvas id="breadth-chart"></canvas></div>
+      </div>
+      <div class="zone-legend">
+        <div class="zl-item"><div class="zl-swatch zl-bull-s"></div><span>Bullish ≥70%</span></div>
+        <div class="zl-item"><div class="zl-swatch zl-neut-s"></div><span>Neutral 50–70%</span></div>
+        <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;50%</span></div>
+        <div class="zl-item"><div class="zl-swatch" style="background:#475569;"></div><span>SPY price (right axis)</span></div>
+        <div class="zl-item"><div class="zl-swatch" style="background:rgba(148,163,184,0.45);"></div><span>SPY volume</span></div>
+      </div>
+    </div>
 
-    # Attach SPY close and volume to each day's results
-    for day in trading_days:
-        results[day]["spy_close"] = spy_closes.get(day)
-        results[day]["spy_volume"] = spy_vols.get(day)
+  </div>
+</div>
 
-    # Compute % Bullish for each day
-    for day in trading_days:
-        sigs = results[day]
-        # Count only actual ticker signals (exclude metadata keys)
-        ticker_sigs = {k: v for k, v in sigs.items() if k in BULL_SET or k in BEAR_SET}
-        if len(ticker_sigs) < 10:
-            # Not enough data for this day (likely holiday/missing)
-            results[day]["pct_bullish"] = None
-            continue
-        bullish_count = sum(
-            1 for t, s in ticker_sigs.items()
-            if (t in BULL_SET and s == "Bull") or (t in BEAR_SET and s == "Bear")
-        )
-        results[day]["pct_bullish"] = round(bullish_count / TOTAL * 100, 1)
+<!-- ── Heatmap table ── -->
+<div class="card">
+  <div class="card-header">Signal Heatmap — All Tickers × All Dates</div>
+  <div class="card-body" style="padding:0;">
+    <div class="hm-scroll">
+    <table class="hm-table">
+      <thead>
+        <tr>
+          <th class="col-ticker">Ticker</th>
+          <th class="col-name">Name</th>
+          {% for entry in history %}
+            <th>{{ entry.date[5:] }}</th>
+          {% endfor %}
+        </tr>
+        <!-- % Bullish row -->
+        <tr class="pct-row">
+          <td class="col-ticker" style="color:#64748b;font-size:10px;">% Bullish</td>
+          <td class="col-name" style="background:#0f172a;color:#64748b;font-size:10px;">Breadth Score</td>
+          {% for entry in history %}
+            {% set p = entry.pct_bullish %}
+            <td class="{% if p >= 70 %}pct-hi{% elif p < 50 %}pct-lo{% else %}pct-mid{% endif %}">
+              {{ p|int }}%
+            </td>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Bull ETFs group -->
+        <tr class="group-header">
+          <td colspan="{{ history|length + 2 }}">📈 Bullish ETFs — correct when signal = Bull</td>
+        </tr>
+        {% for ticker, name in bull_etfs %}
+        <tr>
+          <td class="col-ticker">{{ ticker }}</td>
+          <td class="col-name">{{ name }}</td>
+          {% for entry in history %}
+            {% set sig = entry.signals.get(ticker, '') %}
+            {% if sig == 'Bull' %}
+              <td class="sig-bull">▲</td>
+            {% elif sig == 'Bear' %}
+              <td class="sig-bear">▼</td>
+            {% else %}
+              <td class="sig-na">—</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+        <!-- Bull count row -->
+        <tr class="count-row">
+          <td class="col-ticker" style="color:#64748b;font-size:10px;">Count</td>
+          <td style="background:#1e2d45;color:#64748b;font-size:10px;">Bull signals</td>
+          {% for entry in history %}
+            {% set cnt = namespace(n=0) %}
+            {% for t, _ in bull_etfs %}{% if entry.signals.get(t) == 'Bull' %}{% set cnt.n = cnt.n + 1 %}{% endif %}{% endfor %}
+            <td>{{ cnt.n }}</td>
+          {% endfor %}
+        </tr>
 
-    return results
+        <!-- Bear ETFs group -->
+        <tr class="group-header">
+          <td colspan="{{ history|length + 2 }}">📉 Inverse/Bear ETFs — correct when signal = Bear</td>
+        </tr>
+        {% for ticker, name in bear_etfs %}
+        <tr>
+          <td class="col-ticker">{{ ticker }}</td>
+          <td class="col-name">{{ name }}</td>
+          {% for entry in history %}
+            {% set sig = entry.signals.get(ticker, '') %}
+            {% if sig == 'Bear' %}
+              <td class="sig-bear-inv">▼</td>
+            {% elif sig == 'Bull' %}
+              <td class="sig-bull-inv">▲</td>
+            {% else %}
+              <td class="sig-na">—</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+        <!-- Bear count row -->
+        <tr class="count-row">
+          <td class="col-ticker" style="color:#64748b;font-size:10px;">Count</td>
+          <td style="background:#1e2d45;color:#64748b;font-size:10px;">Bear signals</td>
+          {% for entry in history %}
+            {% set cnt = namespace(n=0) %}
+            {% for t, _ in bear_etfs %}{% if entry.signals.get(t) == 'Bear' %}{% set cnt.n = cnt.n + 1 %}{% endif %}{% endfor %}
+            <td>{{ cnt.n }}</td>
+          {% endfor %}
+        </tr>
 
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
 
-def get_trading_days(start: date, end: date) -> list[str]:
-    """Return weekdays (Mon-Fri) between start and end inclusive."""
-    days = []
-    cur  = start
-    while cur <= end:
-        if cur.weekday() < 5:
-            days.append(str(cur))
-        cur += timedelta(days=1)
-    return days
+{% else %}
+<div style="text-align:center;padding:60px;color:var(--muted);">
+  <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+  <div style="font-size:16px;font-weight:600;">Building historical data...</div>
+  <div style="margin-top:6px;">Page will refresh automatically when ready.</div>
+</div>
+{% endif %}
 
+</div><!-- /main -->
+</div><!-- /tab-dashboard -->
 
-# ── Seed load ─────────────────────────────────────────────────────────────────
+<!-- ══════════════════════════════════════════════════════════════
+     HOW IT WORKS TAB
+═══════════════════════════════════════════════════════════════ -->
+<div id="tab-howto" class="tab-pane">
+<div class="main">
+<div class="card">
+<div class="card-header">How It Works — Methodology</div>
+<div class="card-body">
+<div class="how-section">
 
-def run_seed_load():
-    """Pull 60 trading days of history and build initial dataset."""
-    with _lock:
-        cache["phase"]    = 1
-        cache["progress"] = "Starting seed load (60 days)..."
-        cache["error"]    = None
+  <h2>Overview</h2>
+  <p>This dashboard measures <strong>market breadth</strong> using a universe of 42 leveraged and inverse ETFs — 21 bull ETFs and their 21 exact inverse counterparts. Each day, the <em>Matrix Series</em> indicator generates a Bull or Bear signal for every ticker. The breadth score reflects what percentage of the 42 ETFs are "correctly aligned" with their expected direction.</p>
 
-    try:
-        today      = date.today()
-        start      = today - timedelta(days=90)  # ~60 trading days
-        days       = get_trading_days(start, today)
+  <h2>The Matrix Series Indicator</h2>
+  <p>The Matrix Series is a Pine Script indicator originally designed for TradingView. It works by computing a triple-smoothed Z-score of price, producing two lines — <code>up</code> and <code>down</code> — where their relative position determines the signal:</p>
 
-        print(f"  Seed load: {len(days)} calendar days from {days[0]} to {days[-1]}")
+  <div class="formula-box">
+ys1  = (High + Low + Close × 2) / 4   ← weighted close<br>
+rk3  = EMA(ys1, 5)                     ← 5-period EMA<br>
+rk4  = StdDev(ys1, 5)                  ← 5-period std deviation<br>
+rk5  = (ys1 − rk3) × 200 / rk4        ← Z-score scaled to ±200<br>
+rk6  = EMA(rk5, 5)                     ← smoothed Z-score<br>
+up   = EMA(rk6, 5)                     ← signal line<br>
+down = EMA(up, 5)                      ← signal line smoother<br>
+<br>
+Signal: up > down → <span style="color:#4ade80">● Bull</span> &nbsp;&nbsp; up &lt; down → <span style="color:#f87171">● Bear</span>
+  </div>
 
-        results = fetch_signals_for_range(days)
+  <p>This formula is implemented in Python using yFinance daily OHLC data, producing results that match TradingView readings exactly (verified against manual readings for June 2026).</p>
 
-        history = []
-        for day in days:
-            pct = results[day].get("pct_bullish")
-            if pct is None:
-                continue
-            spy = results[day].get("spy_close")
-            vol = results[day].get("spy_volume")
-            sigs = {k: v for k, v in results[day].items() if k not in ("pct_bullish", "spy_close", "spy_volume")}
-            history.append({"date": day, "pct_bullish": pct, "spy_close": spy, "spy_volume": vol, "signals": sigs})
+  <h2>The 42 ETF Universe</h2>
+  <p>The universe pairs each major bull leveraged ETF with its exact inverse. This symmetry is intentional — in a truly bullish market, bull ETFs should read Bull <em>and</em> bear ETFs should read Bear simultaneously.</p>
+  <ul>
+    <li><strong>Bull ETFs (21):</strong> TQQQ, SPXL, TNA, WEBL, FAS, HIBL, LABU, SOXL, TECL, SPY, QQQ, ERX, GUSH, NUGT, TMF, TYD, UUP, DRN, YINN, EDC, BULZ</li>
+    <li><strong>Bear ETFs (21):</strong> SQQQ, SPXS, TZA, WEBS, FAZ, HIBS, LABD, SOXS, TECS, SH, PSQ, ERY, DRIP, DUST, TMV, TYO, UDN, DRV, YANG, EDZ, BERZ</li>
+  </ul>
 
-        with _lock:
-            cache["history"]      = history
-            cache["last_updated"] = datetime.now(CT).strftime("%-m/%-d/%y %H:%M CT")
-            cache["phase"]        = 4
-            cache["progress"]     = "Complete"
+  <h2>Breadth Score Calculation</h2>
+  <p>Each day's breadth score counts how many of the 42 ETFs are "correctly aligned":</p>
+  <div class="formula-box">
+Correct alignment =<br>
+  &nbsp;&nbsp;(Bull ETFs with Bull signal) + (Bear ETFs with Bear signal)<br>
+<br>
+% Bullish = Correct alignments ÷ 42 × 100
+  </div>
+  <p>Example: If 15 bull ETFs show Bull and 15 bear ETFs show Bear → 30/42 = <strong>71.4% Bullish</strong>.</p>
 
-        save_history()
-        print(f"  Seed load complete: {len(history)} days stored.")
+  <h2>Signal Zones</h2>
+  <table class="zone-table">
+    <thead><tr><th>Zone</th><th>Score</th><th>Interpretation</th></tr></thead>
+    <tbody>
+      <tr><td style="color:#15803d;font-weight:700;">● Bullish</td><td>≥ 70%</td><td>Strong majority of ETF pairs aligned bullishly — risk-on regime</td></tr>
+      <tr><td style="color:#374151;font-weight:700;">◆ Neutral</td><td>50–70%</td><td>Mixed signals — transition or consolidation phase</td></tr>
+      <tr><td style="color:#991b1b;font-weight:700;">● Bearish</td><td>&lt; 50%</td><td>Majority misaligned — risk-off or bearish regime</td></tr>
+    </tbody>
+  </table>
 
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        with _lock:
-            cache["error"]   = str(e)
-            cache["phase"]   = 4
+  <h2>Data & Refresh Schedule</h2>
+  <ul>
+    <li><strong>Data source:</strong> Yahoo Finance daily OHLC (free, no API key required)</li>
+    <li><strong>Warmup period:</strong> ~25 bars needed per ticker for EMA chain to stabilize</li>
+    <li><strong>History:</strong> 60+ trading days stored in Upstash Redis (survives server restarts)</li>
+    <li><strong>Daily refresh:</strong> Cron job runs after market close, appending one new day</li>
+    <li><strong>Manual refresh:</strong> Visit <code>/refresh</code> to force an update</li>
+    <li><strong>Full reseed:</strong> Visit <code>/reseed</code> if history needs to be rebuilt</li>
+  </ul>
 
+  <h2>Important Caveats</h2>
+  <ul>
+    <li>The Matrix Series uses <strong>daily closing prices only</strong> — intraday readings will not match until after market close</li>
+    <li>A small number of tickers (e.g. WEBS, BERZ) may have limited history or low liquidity — these show "—" in the heatmap and are excluded from that day's count</li>
+    <li>This indicator is a <strong>trend-following breadth tool</strong>, not a leading indicator — it confirms regime, it does not predict reversals</li>
+  </ul>
 
-def run_daily_refresh():
-    """Add today's reading to history."""
-    with _lock:
-        cache["phase"]    = 1
-        cache["progress"] = "Refreshing today's data..."
-        cache["error"]    = None
+</div>
+</div>
+</div>
+</div>
+</div><!-- /tab-howto -->
 
-    try:
-        today     = str(date.today())
-        # Skip weekends
-        if date.today().weekday() >= 5:
-            with _lock:
-                cache["phase"]    = 4
-                cache["progress"] = "Weekend — no update"
-            return
+<footer>
+  Data: Yahoo Finance &nbsp;|&nbsp; Indicator: Matrix Series (Pine Script port, smoother=5) &nbsp;|&nbsp;
+  Breadth = % of 42 leveraged ETF pairs aligned with expected direction &nbsp;|&nbsp; Refreshes daily after market close
+</footer>
 
-        results = fetch_signals_for_range([today])
-        pct     = results[today].get("pct_bullish")
+<!-- Chart.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
 
-        if pct is None:
-            with _lock:
-                cache["phase"]    = 4
-                cache["progress"] = "No data for today yet"
-            return
+{% if history %}
+const historyData = {{ history | tojson }};
+const labels = historyData.map(d => d.date.slice(5));   // MM-DD
+const values = historyData.map(d => d.pct_bullish);
+const N = values.length;
 
-        spy = results[today].get("spy_close")
-        vol = results[today].get("spy_volume")
-        sigs = {k: v for k, v in results[today].items() if k not in ("pct_bullish", "spy_close", "spy_volume")}
-        entry = {"date": today, "pct_bullish": pct, "spy_close": spy, "spy_volume": vol, "signals": sigs}
+// Shared bar colors
+const barColors = values.map(v => v >= 70 ? '#15803d' : v < 50 ? '#991b1b' : '#6b7280');
+const pointColors = barColors;
 
-        with _lock:
-            # Replace today's entry if it exists, else append
-            existing = [h for h in cache["history"] if h["date"] != today]
-            cache["history"]      = existing + [entry]
-            cache["last_updated"] = datetime.now(CT).strftime("%-m/%-d/%y %H:%M CT")
-            cache["phase"]        = 4
-            cache["progress"]     = "Complete"
+// ── Zone background plugin (shared) ──────────────────────────────────────────
+function makeZonePlugin(id) {
+  return {
+    id: 'zone_' + id,
+    beforeDraw(chart) {
+      const { ctx, chartArea, scales } = chart;
+      if (!chartArea) return;
+      const y = scales.y;
+      const getY = v => y.getPixelForValue(v);
+      ctx.fillStyle = 'rgba(21,128,61,0.10)';
+      ctx.fillRect(chartArea.left, getY(100), chartArea.width, getY(70) - getY(100));
+      ctx.fillStyle = 'rgba(100,116,139,0.07)';
+      ctx.fillRect(chartArea.left, getY(70),  chartArea.width, getY(50) - getY(70));
+      ctx.fillStyle = 'rgba(153,27,27,0.10)';
+      ctx.fillRect(chartArea.left, getY(50),  chartArea.width, getY(0)  - getY(50));
+    }
+  };
+}
 
-        save_history()
-        print(f"  Daily refresh complete: {today} = {pct}% bullish")
+// ── Shared x-axis config ──────────────────────────────────────────────────────
+const xAxis = {
+  ticks: {
+    maxTicksLimit: Math.min(N, 30),
+    font: { size: 10 },
+    color: '#6b7280',
+    maxRotation: 45,
+  },
+  grid: { color: '#e5e7eb' }
+};
 
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        with _lock:
-            cache["error"]   = str(e)
-            cache["phase"]   = 4
+// ── SPY prices and volume from history ────────────────────────────────────────
+const spyValues = historyData.map(d => d.spy_close ?? null);
+const spyValid  = spyValues.filter(v => v !== null);
+const spyMin    = spyValid.length ? Math.floor(Math.min(...spyValid) * 0.98) : 0;
+const spyMax    = spyValid.length ? Math.ceil(Math.max(...spyValid)  * 1.02) : 600;
 
+const volValues = historyData.map(d => d.spy_volume ? Math.round(d.spy_volume / 1e6) : null);
+const volValid  = volValues.filter(v => v !== null);
+const volMax    = volValid.length ? Math.max(...volValid) : 100;
 
-def _ensure_started():
-    global _started
-    if not _started:
-        _started = True
-        loaded = load_history()
-        if loaded and len(cache["history"]) > 0:
-            with _lock:
-                cache["phase"]        = 4
-                cache["progress"]     = "Loaded from cache"
-                cache["last_updated"] = cache["history"][-1]["date"]
-            print(f"  Cache loaded: {len(cache['history'])} days")
-        else:
-            print("  No cache — starting seed load")
-            threading.Thread(target=run_seed_load, daemon=True).start()
+// ── Combined chart ───────────────────────────────────────────────────────────
+const lineCtx = document.getElementById('breadth-chart').getContext('2d');
+new Chart(lineCtx, {
+  type: 'line',
+  plugins: [makeZonePlugin('line')],
+  data: {
+    labels,
+    datasets: [
+      // Breadth % (left axis)
+      {
+        type: 'line',
+        label: '% Bullish Breadth',
+        data: values,
+        yAxisID: 'y',
+        borderWidth: 2,
+        pointRadius: N > 80 ? 2 : 4,
+        pointBackgroundColor: pointColors,
+        pointBorderColor: pointColors,
+        fill: false,
+        tension: 0.3,
+        segment: { borderColor: ctx => ctx.p1.parsed.y >= 70 ? '#15803d' : ctx.p1.parsed.y < 50 ? '#dc2626' : '#6b7280' },
+        order: 1,
+      },
+      // SPY close price (right axis) — solid dark line
+      {
+        type: 'line',
+        label: 'SPY Close ($)',
+        data: spyValues,
+        yAxisID: 'ySpy',
+        borderColor: '#475569',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: false,
+        tension: 0.2,
+        order: 2,
+      },
+      // SPY volume bars (bottom of chart)
+      {
+        type: 'bar',
+        label: 'SPY Volume (M)',
+        data: volValues,
+        yAxisID: 'yVol',
+        backgroundColor: 'rgba(148,163,184,0.35)',
+        borderWidth: 0,
+        borderRadius: 1,
+        barPercentage: 0.7,
+        categoryPercentage: 0.9,
+        order: 3,
+      }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        display: true,
+        position: 'top',
+        align: 'end',
+        labels: {
+          boxWidth: 20, boxHeight: 3, padding: 14,
+          font: { size: 11.5, weight: '600' },
+          color: '#374151',
+          usePointStyle: false,
+          filter: item => item.text !== 'SPY Volume (M)',
+        }
+      },
+      tooltip: {
+        callbacks: {
+          label: c => {
+            if (c.dataset.label.includes('Volume')) return `Vol: ${c.parsed.y}M shares`;
+            if (c.dataset.label.includes('SPY')) return `SPY $${c.parsed.y}`;
+            return `${c.parsed.y}% bullish`;
+          },
+          afterLabel: c => {
+            if (!c.dataset.label.includes('Breadth')) return '';
+            return c.parsed.y >= 70 ? '▲ Bullish' : c.parsed.y < 50 ? '▼ Bearish' : '◆ Neutral';
+          }
+        }
+      }
+    },
+    scales: {
+      x: xAxis,
+      y: {
+        min: 0, max: 100, position: 'left',
+        ticks: { stepSize: 10, font: { size: 10 }, color: '#6b7280', callback: v => v + '%' },
+        grid: { color: '#e5e7eb' }
+      },
+      ySpy: {
+        min: spyMin, max: spyMax, position: 'right',
+        ticks: { font: { size: 10 }, color: '#475569', callback: v => '$' + v },
+        grid: { drawOnChartArea: false }
+      },
+      yVol: {
+        min: 0, max: volMax * 5,
+        display: false,
+        grid: { drawOnChartArea: false }
+      }
+    }
+  }
+});
 
+// ── Scroll heatmap to end ─────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  const hmScroll = document.querySelector('.hm-scroll');
+  if (hmScroll) hmScroll.scrollLeft = hmScroll.scrollWidth;
+});
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-
-@app.route("/")
-def index():
-    _ensure_started()
-    with _lock:
-        snap = dict(cache)
-    is_loading = snap["phase"] < 4 or len(snap["history"]) == 0
-    return render_template("index.html",
-        history=snap["history"],
-        last_updated=snap["last_updated"],
-        is_loading=is_loading,
-        phase=snap["phase"],
-        progress=snap["progress"],
-        error=snap["error"],
-        bull_etfs=BULL_ETFS,
-        bear_etfs=BEAR_ETFS,
-    )
-
-
-@app.route("/refresh")
-def refresh():
-    """Daily cron endpoint — call after market close (e.g. 4:30 PM CT)."""
-    threading.Thread(target=run_daily_refresh, daemon=True).start()
-    return jsonify({"status": "daily refresh started"})
-
-
-@app.route("/reseed")
-def reseed():
-    """Force full 60-day seed reload (use if Redis data is lost)."""
-    with _lock:
-        cache["history"] = []
-        cache["phase"]   = 0
-    threading.Thread(target=run_seed_load, daemon=True).start()
-    return jsonify({"status": "seed reload started"})
-
-
-@app.route("/status")
-def status():
-    _ensure_started()
-    with _lock:
-        return jsonify({
-            "phase":        cache["phase"],
-            "days":         len(cache["history"]),
-            "progress":     cache["progress"],
-            "last_updated": cache["last_updated"],
-            "error":        cache["error"],
-        })
-
-
-@app.route("/api/data")
-def api_data():
-    with _lock:
-        return jsonify(cache["history"])
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+{% endif %}
+</script>
+</body>
+</html>
