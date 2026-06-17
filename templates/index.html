@@ -81,7 +81,7 @@ header {
 
 /* ── Stats row ── */
 .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-.stat-box  { background: var(--surface); border-radius: 8px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,.07); text-align: center; }
+.stat-box  { background: var(--surface); border-radius: 8px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,.07); text-align: center; }
 .stat-val  { font-size: 26px; font-weight: 800; line-height: 1.1; }
 .stat-lbl  { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
 .c-bull { color: var(--bull); } .c-bear { color: var(--bear); } .c-neut { color: var(--neut); }
@@ -95,7 +95,7 @@ header {
 .fv-bar-card {
   background: var(--surface);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   box-shadow: 0 1px 3px rgba(0,0,0,.07);
 }
 .fv-bar-label {
@@ -103,12 +103,12 @@ header {
   justify-content: space-between;
   font-size: 11px;
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .fv-bar-label .fv-green { color: #15803d; }
 .fv-bar-label .fv-red   { color: #991b1b; }
 .fv-bar-track {
-  height: 10px;
+  height: 8px;
   border-radius: 3px;
   display: flex;
   overflow: hidden;
@@ -130,7 +130,7 @@ header {
   justify-content: space-between;
   font-size: 9.5px;
   color: var(--muted);
-  margin-top: 3px;
+  margin-top: 2px;
 }
 
 /* ── Charts — shared scroll container ── */
@@ -293,9 +293,9 @@ footer {
   <div class="h-right">
     {% if history %}
       {% set pct = history[-1].pct_bullish %}
-      {% if pct >= 70 %}
+      {% if pct >= 60 %}
         <div class="score-pill pill-bull"><span class="pill-dot dot-bull"></span>BULLISH &nbsp;|&nbsp; {{ pct }}% aligned</div>
-      {% elif pct < 50 %}
+      {% elif pct < 40 %}
         <div class="score-pill pill-bear"><span class="pill-dot dot-bear"></span>BEARISH &nbsp;|&nbsp; {{ pct }}% aligned</div>
       {% else %}
         <div class="score-pill pill-neut"><span class="pill-dot dot-neut"></span>NEUTRAL &nbsp;|&nbsp; {{ pct }}% aligned</div>
@@ -325,7 +325,7 @@ footer {
 <!-- ── Stats ── -->
 <div class="stats-row">
   <div class="stat-box">
-    <div class="stat-val {% if pct >= 70 %}c-bull{% elif pct < 50 %}c-bear{% else %}c-neut{% endif %}">{{ pct }}%</div>
+    <div class="stat-val {% if pct >= 60 %}c-bull{% elif pct < 40 %}c-bear{% else %}c-neut{% endif %}">{{ pct }}%</div>
     <div class="stat-lbl">Today's Breadth Score</div>
   </div>
   {% set bull_count = namespace(n=0) %}
@@ -485,7 +485,7 @@ footer {
           <td class="col-name" style="background:#0f172a;color:#64748b;font-size:10px;">Breadth Score</td>
           {% for entry in history %}
             {% set p = entry.pct_bullish %}
-            <td class="{% if p >= 70 %}pct-hi{% elif p < 50 %}pct-lo{% else %}pct-mid{% endif %}">
+            <td class="{% if p >= 60 %}pct-hi{% elif p < 40 %}pct-lo{% else %}pct-mid{% endif %}">
               {{ p|int }}%
             </td>
           {% endfor %}
@@ -622,9 +622,9 @@ Correct alignment =<br>
   <table class="zone-table">
     <thead><tr><th>Zone</th><th>Score</th><th>Interpretation</th></tr></thead>
     <tbody>
-      <tr><td style="color:#15803d;font-weight:700;">● Bullish</td><td>≥ 70%</td><td>Strong majority of ETF pairs aligned bullishly — risk-on regime</td></tr>
-      <tr><td style="color:#374151;font-weight:700;">◆ Neutral</td><td>50–70%</td><td>Mixed signals — transition or consolidation phase</td></tr>
-      <tr><td style="color:#991b1b;font-weight:700;">● Bearish</td><td>&lt; 50%</td><td>Majority misaligned — risk-off or bearish regime</td></tr>
+      <tr><td style="color:#15803d;font-weight:700;">● Bullish</td><td>≥ 60%</td><td>Strong majority of ETF pairs aligned bullishly — risk-on regime</td></tr>
+      <tr><td style="color:#374151;font-weight:700;">◆ Neutral</td><td>40–60%</td><td>Mixed signals — transition or consolidation phase</td></tr>
+      <tr><td style="color:#991b1b;font-weight:700;">● Bearish</td><td>&lt; 40%</td><td>Majority misaligned — risk-off or bearish regime</td></tr>
     </tbody>
   </table>
 
@@ -674,7 +674,7 @@ const values = historyData.map(d => d.pct_bullish);
 const N = values.length;
 
 // Shared bar colors
-const barColors = values.map(v => v >= 70 ? '#15803d' : v < 50 ? '#991b1b' : '#6b7280');
+const barColors = values.map(v => v >= 60 ? '#15803d' : v < 40 ? '#991b1b' : '#6b7280');
 const pointColors = barColors;
 
 // ── Zone background plugin (shared) ──────────────────────────────────────────
@@ -687,11 +687,11 @@ function makeZonePlugin(id) {
       const y = scales.y;
       const getY = v => y.getPixelForValue(v);
       ctx.fillStyle = 'rgba(21,128,61,0.10)';
-      ctx.fillRect(chartArea.left, getY(100), chartArea.width, getY(70) - getY(100));
+      ctx.fillRect(chartArea.left, getY(100), chartArea.width, getY(60) - getY(100));
       ctx.fillStyle = 'rgba(100,116,139,0.07)';
-      ctx.fillRect(chartArea.left, getY(70),  chartArea.width, getY(50) - getY(70));
+      ctx.fillRect(chartArea.left, getY(60),  chartArea.width, getY(40) - getY(60));
       ctx.fillStyle = 'rgba(153,27,27,0.10)';
-      ctx.fillRect(chartArea.left, getY(50),  chartArea.width, getY(0)  - getY(50));
+      ctx.fillRect(chartArea.left, getY(40),  chartArea.width, getY(0)  - getY(40));
     }
   };
 }
@@ -737,7 +737,7 @@ new Chart(lineCtx, {
         pointBorderColor: pointColors,
         fill: false,
         tension: 0.3,
-        segment: { borderColor: ctx => ctx.p1.parsed.y >= 70 ? '#15803d' : ctx.p1.parsed.y < 50 ? '#dc2626' : '#6b7280' },
+        segment: { borderColor: ctx => ctx.p1.parsed.y >= 60 ? '#15803d' : ctx.p1.parsed.y < 40 ? '#dc2626' : '#6b7280' },
         order: 1,
       },
       // SPY close price (right axis) — solid dark line
@@ -793,7 +793,7 @@ new Chart(lineCtx, {
           },
           afterLabel: c => {
             if (!c.dataset.label.includes('Breadth')) return '';
-            return c.parsed.y >= 70 ? '▲ Bullish' : c.parsed.y < 50 ? '▼ Bearish' : '◆ Neutral';
+            return c.parsed.y >= 60 ? '▲ Bullish' : c.parsed.y < 40 ? '▼ Bearish' : '◆ Neutral';
           }
         }
       }
