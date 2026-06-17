@@ -15,8 +15,10 @@ import threading
 import time
 import json
 import os
+import re
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 CT = ZoneInfo("America/Chicago")
@@ -24,6 +26,7 @@ CT = ZoneInfo("America/Chicago")
 REDIS_URL   = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 REDIS_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 REDIS_KEY   = "breadth_history_v1"
+REDIS_KEY_FV = "finviz_breadth_v1"
 
 # ── Ticker lists ──────────────────────────────────────────────────────────────
 # For bull ETFs: Bull signal = correct (bullish breadth)
@@ -144,6 +147,102 @@ def load_history():
     cache["history"] = data
     print(f"  Loaded {len(data)} days from Redis.")
     return True
+
+
+# ── Finviz market breadth scraper ─────────────────────────────────────────────
+
+def fetch_finviz_breadth():
+    """
+    Scrape the 4 breadth bars from the Finviz homepage:
+    Advancing/Declining, New High/New Low, Above/Below SMA50, Above/Below SMA200.
+    Returns dict or None on failure.
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        r = _req.get("https://finviz.com/", headers=headers, timeout=15)
+        if r.status_code != 200:
+            print(f"  Finviz fetch failed: HTTP {r.status_code}")
+            return None
+
+        text = r.text
+        result = {"date": str(date.today())}
+
+        # Pattern: "Advancing\n41.5% (2323)" / "Declining\n(3009) 53.7%"
+        m = re.search(r'Advancing[^0-9]*?([\d.]+)%\s*\((\d+)\)', text)
+        if m:
+            result["adv_pct"] = float(m.group(1))
+            result["adv_count"] = int(m.group(2))
+
+        m = re.search(r'Declining[^0-9]*?\((\d+)\)\s*([\d.]+)%', text)
+        if m:
+            result["dec_count"] = int(m.group(1))
+            result["dec_pct"] = float(m.group(2))
+
+        # Pattern: "New High\n53.6% (173)" / "New Low\n(150) 46.4%"
+        m = re.search(r'New High[^0-9]*?([\d.]+)%\s*\((\d+)\)', text)
+        if m:
+            result["hi_pct"] = float(m.group(1))
+            result["hi_count"] = int(m.group(2))
+
+        m = re.search(r'New Low[^0-9]*?\((\d+)\)\s*([\d.]+)%', text)
+        if m:
+            result["lo_count"] = int(m.group(1))
+            result["lo_pct"] = float(m.group(2))
+
+        # Pattern: "Above\n51.2% (2861)...SMA50" / "Below\n(2724) 48.8%"
+        # SMA50 block
+        sma50_block = re.search(r'(Above[^S]*?SMA50[^B]*?Below[^0-9]*?\(\d+\)\s*[\d.]+%)', text, re.DOTALL)
+        if sma50_block:
+            block = sma50_block.group(1)
+            m = re.search(r'Above[^0-9]*?([\d.]+)%\s*\((\d+)\)', block)
+            if m:
+                result["sma50_above_pct"] = float(m.group(1))
+                result["sma50_above_count"] = int(m.group(2))
+            m = re.search(r'Below[^0-9]*?\((\d+)\)\s*([\d.]+)%', block)
+            if m:
+                result["sma50_below_count"] = int(m.group(1))
+                result["sma50_below_pct"] = float(m.group(2))
+
+        # SMA200 block
+        sma200_block = re.search(r'(Above[^S]*?SMA200[^B]*?Below[^0-9]*?\(\d+\)\s*[\d.]+%)', text, re.DOTALL)
+        if sma200_block:
+            block = sma200_block.group(1)
+            m = re.search(r'Above[^0-9]*?([\d.]+)%\s*\((\d+)\)', block)
+            if m:
+                result["sma200_above_pct"] = float(m.group(1))
+                result["sma200_above_count"] = int(m.group(2))
+            m = re.search(r'Below[^0-9]*?\((\d+)\)\s*([\d.]+)%', block)
+            if m:
+                result["sma200_below_count"] = int(m.group(1))
+                result["sma200_below_pct"] = float(m.group(2))
+
+        # Check we got at least the advancing/declining data
+        if "adv_pct" not in result:
+            print("  Finviz parse failed: could not find Advancing data")
+            return None
+
+        print(f"  Finviz breadth scraped: Adv {result.get('adv_pct')}% / Dec {result.get('dec_pct')}%")
+        return result
+
+    except Exception as e:
+        print(f"  Finviz scrape error: {e}")
+        return None
+
+
+def save_finviz(data):
+    """Save Finviz breadth data to Redis (25-hour TTL)."""
+    if data:
+        _rset(REDIS_KEY_FV, data, ex=90000)
+
+
+def load_finviz():
+    """Load Finviz breadth data from Redis."""
+    return _rget(REDIS_KEY_FV)
 
 
 # ── Matrix Series calculation ─────────────────────────────────────────────────
@@ -272,7 +371,7 @@ def run_seed_load():
 
     try:
         today      = date.today()
-        start = today - timedelta(days=370)  # ~252 trading days
+        start      = today - timedelta(days=90)  # ~60 trading days
         days       = get_trading_days(start, today)
 
         print(f"  Seed load: {len(days)} calendar days from {days[0]} to {days[-1]}")
@@ -346,6 +445,12 @@ def run_daily_refresh():
         save_history()
         print(f"  Daily refresh complete: {today} = {pct}% bullish")
 
+        # Scrape Finviz breadth bars
+        fv = fetch_finviz_breadth()
+        if fv:
+            save_finviz(fv)
+            print(f"  Finviz breadth saved")
+
     except Exception as e:
         import traceback; traceback.print_exc()
         with _lock:
@@ -386,6 +491,7 @@ def index():
         error=snap["error"],
         bull_etfs=BULL_ETFS,
         bear_etfs=BEAR_ETFS,
+        finviz=load_finviz(),
     )
 
 
@@ -423,6 +529,25 @@ def status():
 def api_data():
     with _lock:
         return jsonify(cache["history"])
+
+
+@app.route("/test-finviz")
+def test_finviz():
+    """Debug: scrape Finviz now and show parsed results."""
+    data = fetch_finviz_breadth()
+    if data:
+        save_finviz(data)
+    return jsonify({"status": "ok" if data else "failed", "data": data})
+
+
+@app.route("/refresh-finviz")
+def refresh_finviz():
+    """Manually refresh just the Finviz breadth bars."""
+    data = fetch_finviz_breadth()
+    if data:
+        save_finviz(data)
+        return jsonify({"status": "saved", "data": data})
+    return jsonify({"status": "scrape failed", "data": None})
 
 
 if __name__ == "__main__":
