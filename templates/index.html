@@ -349,7 +349,7 @@ footer {
   {% endif %}
   <div class="stat-box">
     <div class="stat-val c-bull">{{ history | selectattr('pct_bullish', 'ge', 70) | list | length }}</div>
-    <div class="stat-lbl">Bullish Days (≥70%)</div>
+    <div class="stat-lbl">Bullish Days (≥60%)</div>
   </div>
 </div>
 
@@ -448,15 +448,15 @@ footer {
     <div class="chart-section">
       <div class="chart-section-header">
         <span>% Bullish Over Time</span>
-        <span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;">Green ≥70% · Grey 50–70% · Red &lt;50%</span>
+        <span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;">Green ≥60% · Grey 40–60% · Red &lt;40%</span>
       </div>
       <div class="chart-body">
         <div id="chart-wrap"><canvas id="breadth-chart"></canvas></div>
       </div>
       <div class="zone-legend">
-        <div class="zl-item"><div class="zl-swatch zl-bull-s"></div><span>Bullish ≥70%</span></div>
-        <div class="zl-item"><div class="zl-swatch zl-neut-s"></div><span>Neutral 50–70%</span></div>
-        <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;50%</span></div>
+        <div class="zl-item"><div class="zl-swatch zl-bull-s"></div><span>Bullish ≥60%</span></div>
+        <div class="zl-item"><div class="zl-swatch zl-neut-s"></div><span>Neutral 40–60%</span></div>
+        <div class="zl-item"><div class="zl-swatch zl-bear-s"></div><span>Bearish &lt;40%</span></div>
         <div class="zl-item"><div class="zl-swatch" style="background:#475569;"></div><span>SPY price (right axis)</span></div>
         <div class="zl-item"><div class="zl-swatch" style="background:rgba(148,163,184,0.45);"></div><span>SPY volume</span></div>
       </div>
